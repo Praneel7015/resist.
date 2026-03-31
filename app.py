@@ -1,3 +1,9 @@
+"""
+resist. — Flask App
+Detection priority:
+  1. Local ONNX models (inference/models/*.onnx)  — zero API cost
+  2. Gemini 1.5 Flash fallback                    — if models not trained yet
+"""
 import os, io, base64, json
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
@@ -13,28 +19,23 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 ALLOWED = {'.jpg', '.jpeg', '.png', '.webp'}
 
-DIGIT  = dict(black=0,brown=1,red=2,orange=3,yellow=4,
-              green=5,blue=6,violet=7,gray=8,grey=8,white=9)
-MULT   = dict(black=1,brown=10,red=100,orange=1_000,yellow=10_000,
-              green=100_000,blue=1_000_000,violet=10_000_000,
-              gray=100_000_000,grey=100_000_000,white=1_000_000_000,
-              gold=0.1,silver=0.01)
-TOL    = dict(brown='±1%',red='±2%',green='±0.5%',blue='±0.25%',
-              violet='±0.1%',gray='±0.05%',grey='±0.05%',
-              gold='±5%',silver='±10%',none='±20%')
-TEMPCO = dict(black=250,brown=100,red=50,orange=15,yellow=25,
-              green=20,blue=10,violet=5,gray=1,grey=1)
+# ── Try to load the local ONNX detector ────────────────────────────────────────
+_local_detector = None
+_local_error    = None
 
-PROMPT = (
-    "You are an expert electronics technician. Identify the resistor color bands "
-    "in this image, reading left-to-right starting from the end nearest a lead/leg. "
-    "The tolerance band (gold or silver) is typically on the right side. "
-    "Return ONLY a valid JSON object — no markdown, no explanation:\n"
-    '{"bands":["color1","color2",...],"confidence":"high|medium|low"}\n'
-    "Valid colors (lowercase only): black brown red orange yellow green blue violet gray white gold silver\n"
-    'If no resistor is visible or bands cannot be determined: {"error":"brief reason"}'
-)
+try:
+    from inference.detector import get_detector
+    _local_detector = get_detector()
+    print("[app] ✅ Local ONNX models loaded — running fully offline")
+except FileNotFoundError as e:
+    _local_error = str(e)
+    print(f"[app] ⚠️  Local models not found — will use Gemini API")
+    print(f"[app]    {e}")
+except Exception as e:
+    _local_error = str(e)
+    print(f"[app] ⚠️  Could not load local models: {e} — will use Gemini API")
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
 def _to_jpeg_b64(raw: bytes) -> str:
     img = Image.open(io.BytesIO(raw))
     if img.mode not in ('RGB', 'RGBA'):
@@ -48,6 +49,30 @@ def _to_jpeg_b64(raw: bytes) -> str:
     out = io.BytesIO()
     img.save(out, format='JPEG', quality=88)
     return base64.standard_b64encode(out.getvalue()).decode()
+
+
+DIGIT  = dict(black=0,brown=1,red=2,orange=3,yellow=4,
+              green=5,blue=6,violet=7,gray=8,grey=8,white=9)
+MULT   = dict(black=1,brown=10,red=100,orange=1_000,yellow=10_000,
+              green=100_000,blue=1_000_000,violet=10_000_000,
+              gray=100_000_000,grey=100_000_000,white=1_000_000_000,
+              gold=0.1,silver=0.01)
+TOL    = dict(brown='±1%',red='±2%',green='±0.5%',blue='±0.25%',
+              violet='±0.1%',gray='±0.05%',grey='±0.05%',
+              gold='±5%',silver='±10%',none='±20%')
+TEMPCO = dict(black=250,brown=100,red=50,orange=15,yellow=25,
+              green=20,blue=10,violet=5,gray=1,grey=1)
+
+GEMINI_PROMPT = (
+    "You are an expert electronics technician. Identify the resistor color bands "
+    "in this image, reading left-to-right starting from the end nearest a lead/leg. "
+    "The tolerance band (gold or silver) is typically on the right side. "
+    "Return ONLY a valid JSON object — no markdown, no explanation:\n"
+    '{"bands":["color1","color2",...],"confidence":"high|medium|low"}\n'
+    "Valid colors: black brown red orange yellow green blue violet gray white gold silver\n"
+    'If no resistor is visible: {"error":"brief reason"}'
+)
+
 
 def _calc(bands: list) -> dict:
     b = [c.lower().strip() for c in bands]
@@ -66,17 +91,67 @@ def _calc(bands: list) -> dict:
             res['ohms'] = (DIGIT[b[0]] * 100 + DIGIT[b[1]] * 10 + DIGIT[b[2]]) * MULT[b[3]]
             res['tolerance'] = TOL.get(b[4])
             tc = TEMPCO.get(b[5])
-            if tc:
-                res['tempco'] = f'{tc} ppm/K'
+            if tc: res['tempco'] = f'{tc} ppm/K'
         else:
             return {'error': f'Need 3–6 bands, got {n}'}
     except KeyError as e:
         return {'error': f'Unknown color: {str(e).strip(chr(39))}'}
     return res
 
+
+def _gemini_detect(image_bytes: bytes) -> dict:
+    """Fallback to Gemini 1.5 Flash when local models are not available."""
+    key = os.environ.get('GEMINI_API_KEY')
+    if not key:
+        return {'error': 'No local models found and GEMINI_API_KEY is not set. '
+                         'Train the models first or add a Gemini API key.'}
+    import urllib.request, urllib.error
+    b64 = _to_jpeg_b64(image_bytes)
+    url  = (f'https://generativelanguage.googleapis.com/v1beta/'
+            f'models/gemini-1.5-flash:generateContent?key={key}')
+    payload = json.dumps({
+        'contents': [{'parts': [
+            {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}},
+            {'text': GEMINI_PROMPT}
+        ]}],
+        'generationConfig': {'temperature': 0, 'maxOutputTokens': 256}
+    }).encode()
+    try:
+        req = urllib.request.Request(url, data=payload,
+                                     headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        raw = data['candidates'][0]['content']['parts'][0]['text'].strip().strip('`')
+        if raw.startswith('json'): raw = raw[4:].strip()
+        detection = json.loads(raw)
+    except urllib.error.HTTPError as e:
+        return {'error': f'Gemini API error {e.code}: {e.read().decode()[:200]}'}
+    except json.JSONDecodeError:
+        return {'error': 'Model returned unexpected format'}
+    except Exception as e:
+        return {'error': f'Detection failed: {e}'}
+
+    if 'error' in detection:
+        return detection
+
+    bands = detection.get('bands', [])
+    if not bands:
+        return {'error': 'No bands found in image'}
+
+    result = _calc(bands)
+    if 'error' not in result:
+        result['confidence'] = detection.get('confidence', 'medium')
+        result['source'] = 'gemini'
+    return result
+
+
+# ── Routes ──────────────────────────────────────────────────────────────────────
 @app.get('/health')
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({
+        'status': 'ok',
+        'mode': 'local' if _local_detector else 'gemini'
+    })
 
 @app.route('/')
 def index():
@@ -86,65 +161,28 @@ def index():
 def analyze():
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
-
-    f = request.files['image']
+    f   = request.files['image']
     ext = os.path.splitext(secure_filename(f.filename or 'x.jpg'))[1].lower()
     if ext not in ALLOWED:
         return jsonify({'error': f'Unsupported file type: {ext}'}), 400
 
-    key = os.environ.get('GEMINI_API_KEY')
-    if not key:
-        return jsonify({'error': 'GEMINI_API_KEY is not configured on this server'}), 500
+    image_bytes = f.read()
 
-    try:
-        b64 = _to_jpeg_b64(f.read())
-    except Exception as e:
-        return jsonify({'error': f'Cannot read image: {e}'}), 400
+    # ── Path A: local ONNX models ──────────────────────────────────────────────
+    if _local_detector is not None:
+        result = _local_detector.detect(image_bytes)
+        if 'error' in result:
+            return jsonify(result), 422
+        result['source'] = 'local'
+        return jsonify(result)
 
-    try:
-        import urllib.request, urllib.error
-        url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}'
-        payload = json.dumps({
-            'contents': [{
-                'parts': [
-                    {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}},
-                    {'text': PROMPT}
-                ]
-            }],
-            'generationConfig': {'temperature': 0, 'maxOutputTokens': 256}
-        }).encode()
-        req = urllib.request.Request(url, data=payload,
-                                     headers={'Content-Type': 'application/json'}, method='POST')
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
-
-        raw = data['candidates'][0]['content']['parts'][0]['text'].strip()
-        raw = raw.strip('`').strip()
-        if raw.startswith('json'):
-            raw = raw[4:].strip()
-        detection = json.loads(raw)
-
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        return jsonify({'error': f'Gemini API error {e.code}: {body[:200]}'}), 500
-    except json.JSONDecodeError:
-        return jsonify({'error': 'Model returned unexpected response format'}), 500
-    except Exception as e:
-        return jsonify({'error': f'Detection failed: {e}'}), 500
-
-    if 'error' in detection:
-        return jsonify({'error': detection['error']}), 422
-
-    bands = detection.get('bands', [])
-    if not bands:
-        return jsonify({'error': 'No bands found in image'}), 422
-
-    result = _calc(bands)
+    # ── Path B: Gemini API fallback ────────────────────────────────────────────
+    result = _gemini_detect(image_bytes)
     if 'error' in result:
-        return jsonify(result), 422
-
-    result['confidence'] = detection.get('confidence', 'medium')
+        code = 422 if 'No' in result['error'] else 500
+        return jsonify(result), code
     return jsonify(result)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
