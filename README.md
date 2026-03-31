@@ -1,88 +1,127 @@
 # resist.
 
-> Identify any resistor instantly — upload a photo or pick bands manually.
+> Identify any resistor instantly — upload a photo, use your camera, or pick bands manually.
 
-A clean, minimal web app that decodes resistor color bands using AI vision. Built with Flask and a zero-dependency frontend.
+A clean, minimal web app that decodes resistor color bands. Runs fully offline using trained ONNX models, with an optional Gemini API fallback while you train.
 
-![resist UI](https://img.shields.io/badge/stack-Flask%20%2B%20Gemini-orange?style=flat-square) ![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+[![GitHub stars](https://img.shields.io/github/stars/praneel7015/resist?style=flat-square)](https://github.com/praneel7015/resist)
+![stack](https://img.shields.io/badge/stack-Flask%20%2B%20YOLOv8%20%2B%20ONNX-orange?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+
+---
+
+## How it works
+
+```
+Photo → YOLOv8n (detects band bounding boxes) → CNN (classifies each band color) → resistance formula → result
+```
+
+Two models trained on Google Colab (free T4 GPU), exported to ONNX. Zero API costs. Runs on CPU.
 
 ---
 
 ## Features
 
-- **AI photo detection** — point your camera or drop an image; Gemini Vision reads the bands in any lighting
-- **Manual band picker** — live resistor SVG updates as you pick colors; supports 3, 4, 5, and 6-band resistors
-- **Correct resistance math** — separate formulas for each band count, proper tolerance and tempco display
-- **Formatted output** — Ω / kΩ / MΩ / GΩ with tolerance and confidence indicator
-- **Responsive** — works on mobile and desktop, rear camera supported
+- **AI photo detection** — works in any lighting once models are trained
+- **Live camera** — capture and analyze in one tap
+- **Manual band picker** — live resistor SVG, 3/4/5/6-band support, updates in real time
+- **Correct resistance math** — separate formulas per band count, tolerance and tempco display
+- **Offline-first** — ONNX inference, no internet needed after setup
+- **Gemini fallback** — drop in a free API key to use while training your models
 
 ---
 
-## Tech stack
+## Quick start
 
-| Layer | Choice |
-|---|---|
-| Backend | Python 3.11 · Flask 3 · Pillow |
-| AI detection | Google Gemini 1.5 Flash (free tier) |
-| Frontend | Vanilla JS · CSS custom properties · no frameworks |
-| Server | Waitress (production) · Flask dev server (local) |
-| Container | Docker |
-
----
-
-## Getting started
-
-### 1. Get a free Gemini API key
-
-Go to [aistudio.google.com](https://aistudio.google.com) → **Get API key** → Create a key in a new project. The free tier allows 15 requests/minute and 1 million tokens/day — more than enough for personal use.
-
-### 2. Clone and set up
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-username/resist
+git clone https://github.com/praneel7015/resist
 cd resist
 
 python -m venv .venv
-
-# Windows
-.\.venv\Scripts\Activate.ps1
-
-# macOS / Linux
-source .venv/bin/activate
+source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
 ```
 
-### 3. Configure your key
+### 2a. Run with Gemini (no training required)
+
+Get a free key at [aistudio.google.com](https://aistudio.google.com):
 
 ```bash
 cp .env.example .env
-# Edit .env and set your key:
-# GEMINI_API_KEY=AIza...
-```
-
-### 4. Run
-
-```bash
+# Edit .env: GEMINI_API_KEY=AIza...
 python app.py
 ```
 
-Open [http://127.0.0.1:5000](http://127.0.0.1:5000)
+### 2b. Run with local ONNX models (after training)
+
+```bash
+# Place trained models in:
+# inference/models/band_detector.onnx
+# inference/models/color_classifier.onnx
+# inference/models/color_classes.json
+# inference/models/yolo_classes.json
+
+python app.py   # auto-detects models and runs offline
+```
 
 ---
 
-## Usage
+## Training your own models
 
-**Photo mode** — click "Browse Files" or "Use Camera", select a resistor image, press **Analyze Bands**. The app sends the image to Gemini Vision which identifies the band colors, then calculates resistance client-side.
+### Overview
 
-**Manual mode** — switch to the Manual tab, select how many bands your resistor has (3–6), then click each band's color. The resistor diagram and resistance value update in real time.
+The detection pipeline is two models:
+- **YOLOv8n** — finds where each band is on the resistor body (object detection)
+- **ColorCNN** — classifies the color of each detected band crop (image classification)
 
-### Tips for better photo detection
+### Step 1 — Get the Colab notebook
 
-- Good, even lighting matters most — avoid shadows across the bands
-- Photograph the resistor on a plain white or dark background
-- Get as close as possible so the body fills the frame
-- If confidence shows as "low", try manual mode instead
+Open [`notebooks/resist_train.ipynb`](notebooks/resist_train.ipynb) in Google Colab.
+
+Or open directly:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/praneel7015/resist/blob/main/notebooks/resist_train.ipynb)
+
+### Step 2 — Set runtime to T4 GPU
+
+In Colab: **Runtime → Change runtime type → T4 GPU**
+
+### Step 3 — Get a Roboflow API key
+
+1. Create a free account at [roboflow.com](https://roboflow.com)
+2. Profile icon → **Settings → Roboflow API** → copy your key
+3. Paste it into the notebook cell
+
+Dataset used: [Resistor Band Detection](https://universe.roboflow.com/jbhepner/resistor-and-band-detection) — annotated resistor images with per-band bounding boxes and color labels.
+
+### Step 4 — Run all cells
+
+The notebook (~25 minutes on T4) will:
+1. Download and inspect the dataset
+2. Train YOLOv8n for band detection
+3. Generate 2000 synthetic color patches per class (12 colors)
+4. Train the CNN color classifier
+5. Export both models to ONNX
+6. Save 4 files to your Google Drive
+
+### Step 5 — Download and deploy
+
+Copy from `Google Drive → resist_models/` into your project:
+
+```
+resist/
+└── inference/
+    └── models/
+        ├── band_detector.onnx       (~6 MB)
+        ├── color_classifier.onnx    (~400 KB)
+        ├── color_classes.json
+        └── yolo_classes.json
+```
+
+Restart Flask — it will auto-detect the models and switch to offline mode.
 
 ---
 
@@ -90,73 +129,21 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000)
 
 ```
 resist/
-├── app.py                 # Flask server: /, /health, /analyze
-├── requirements.txt       # Python dependencies (no heavy ML libs)
-├── Dockerfile             # Container image
-├── .env.example           # API key template
+├── app.py                    # Flask server — auto-selects local vs Gemini
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+├── notebooks/
+│   └── resist_train.ipynb    # Full Colab training notebook
+├── inference/
+│   ├── detector.py           # ONNX inference — YOLOv8 + CNN pipeline
+│   └── models/               # Put your .onnx files here (not in git)
 ├── templates/
-│   └── index.html         # Single-page UI
+│   └── index.html
 └── static/
-    ├── style.css          # Dark theme, CSS variables, responsive
-    └── app.js             # Upload, camera, manual picker, state machine
+    ├── style.css
+    └── app.js
 ```
-
----
-
-## Roadmap
-
-The current version uses the Gemini API for detection. The long-term goal is a fully self-hosted model with no API dependency. Here's the path:
-
-### Phase 0 — current
-Gemini 1.5 Flash via API. Free tier. Works on any photo.
-
-### Phase 1 — data collection
-Gather a resistor dataset. The [Roboflow Universe](https://universe.roboflow.com/search?q=resistor) has several annotated resistor datasets you can export in YOLO format. Supplement with your own photos.
-
-### Phase 2 — custom model
-Train [YOLOv8n](https://docs.ultralytics.com/models/yolov8/) on Google Colab (free GPU) to detect the band bounding boxes. Then train a small CNN color classifier on the cropped band images. Export both to ONNX for fast CPU inference.
-
-Colab training notebook: [Ultralytics YOLOv8 tutorial](https://colab.research.google.com/github/ultralytics/ultralytics/blob/main/examples/tutorial.ipynb)
-
-Roboflow resistor dataset: [universe.roboflow.com — resistor](https://universe.roboflow.com/search?q=resistor+color+band)
-
-### Phase 3 — self-hosted
-Replace the Gemini API call with local ONNX inference. Zero API costs, runs offline, works in airgapped environments.
-
-
----
-
-## Deployment
-
-### Local development
-
-```bash
-python app.py
-# Runs on http://127.0.0.1:5000
-```
-
-### Docker
-
-```bash
-docker build -t resist .
-docker run -p 8080:8080 -e GEMINI_API_KEY=AIza... resist
-```
-
-### AWS App Runner 
-
-App Runner scales to near-zero when idle (0.25 vCPU / 512 MB floor) so it won't burn credits sitting unused.
-
-1. Push this repo to GitHub
-2. Open the [AWS Console → App Runner](https://console.aws.amazon.com/apprunner)
-3. **Create service** → Source: **Repository** → connect your GitHub repo and branch
-4. Build: use **Dockerfile** (auto-detected)
-5. Port: `8080`
-6. Environment variable: `GEMINI_API_KEY` = your key
-7. Health check path: `/health`
-8. Deploy — App Runner builds and redeploys on every push
-
-Estimated cost with AWS credits: near zero for low-traffic personal use.
-
 
 ---
 
@@ -164,30 +151,80 @@ Estimated cost with AWS credits: near zero for low-traffic personal use.
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | Google AI Studio API key |
-| `PORT` | No | Server port (default: 8080 in Docker, 5000 local) |
+| `GEMINI_API_KEY` | Only without local models | Free key from aistudio.google.com |
+| `PORT` | No | Server port (default 8080 in Docker, 5000 local) |
 
 ---
 
-## Switching AI providers
+## Deployment
 
-The detection logic is isolated in the `/analyze` route in `app.py`. To swap providers, only this function needs changing. The rest of the app (calculation logic, UI, manual mode) is unaffected.
+### Docker
 
-The prompt used for detection:
+```bash
+docker build -t resist .
+docker run -p 8080:8080 resist
+# Add -e GEMINI_API_KEY=... if using Gemini fallback
 ```
-Identify the resistor color bands in this image, reading left-to-right
-starting from the end nearest a lead/leg. Return ONLY valid JSON:
-{"bands":["color1","color2",...],"confidence":"high|medium|low"}
+
+### AWS App Runner (recommended — uses credits efficiently)
+
+App Runner scales near-zero when idle (~$0 cost overnight with AWS credits).
+
+1. Push to GitHub
+2. [AWS Console → App Runner](https://console.aws.amazon.com/apprunner) → Create service
+3. Source: **Repository** → connect GitHub → select this repo
+4. Build: **Dockerfile** (auto-detected)
+5. Port: `8080`
+6. Environment variable: `GEMINI_API_KEY` (only needed without local models)
+7. Health check: `/health`
+8. Deploy — auto-redeploys on every push to main
+
+### AWS Lambda + API Gateway (true serverless)
+
+Add `mangum` to requirements.txt, then:
+
+```python
+# bottom of app.py
+from mangum import Mangum
+handler = Mangum(app)
 ```
+
+Deploy with AWS SAM or Serverless Framework. Note: API Gateway has a 10 MB multipart upload limit — works fine for most phone photos.
+
+
+## Roadmap
+
+- [x] Manual band picker (3–6 bands, live SVG preview)
+- [x] Camera capture mode
+- [x] Gemini Vision API integration
+- [x] YOLOv8 + CNN pipeline (Colab notebook)
+- [x] ONNX export for zero-dependency inference
+- [ ] Ohm's law calculator
+- [ ] LED resistor calculator (supply voltage + LED specs → resistor value)
+- [ ] Voltage divider calculator
+- [ ] Series / parallel resistance calculator
+- [ ] E12 / E24 / E96 nearest standard value finder
+- [ ] SMD resistor code decoder
+- [ ] Scan history
+- [ ] Color code quiz / learning mode
+
+---
+
+## Tips for better detection
+
+- Good even lighting — avoid shadows across the bands
+- Plain background (white or black) behind the resistor
+- Get close so the resistor body fills most of the frame
+- If confidence shows "low", try the Manual tab
 
 ---
 
 ## Contributing
 
-Pull requests welcome. If you've trained a custom YOLO model for band detection and want to contribute it, please open an issue first to discuss the integration approach.
+Pull requests welcome. If you've improved the training pipeline or have a better dataset, please open an issue first.
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)

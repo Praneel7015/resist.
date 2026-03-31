@@ -1,19 +1,12 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
-
-# OS
 .DS_Store
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
-
-# App
 uploads/
-
+inference/models/*.onnx
 .env

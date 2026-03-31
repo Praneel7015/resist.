@@ -2,7 +2,7 @@
 resist. — Flask App
 Detection priority:
   1. Local ONNX models (inference/models/*.onnx)  — zero API cost
-  2. Gemini 1.5 Flash fallback                    — if models not trained yet
+  2. Gemini 2.5 Flash fallback                    — if models not trained yet
 """
 import os, io, base64, json
 from flask import Flask, render_template, request, jsonify
@@ -26,14 +26,14 @@ _local_error    = None
 try:
     from inference.detector import get_detector
     _local_detector = get_detector()
-    print("[app] ✅ Local ONNX models loaded — running fully offline")
+    print("[app] Local ONNX models loaded — running fully offline")
 except FileNotFoundError as e:
     _local_error = str(e)
-    print(f"[app] ⚠️  Local models not found — will use Gemini API")
+    print(f"[app] Local models not found — will use Gemini API")
     print(f"[app]    {e}")
 except Exception as e:
     _local_error = str(e)
-    print(f"[app] ⚠️  Could not load local models: {e} — will use Gemini API")
+    print(f"[app] Could not load local models: {e} — will use Gemini API")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _to_jpeg_b64(raw: bytes) -> str:
@@ -100,7 +100,7 @@ def _calc(bands: list) -> dict:
 
 
 def _gemini_detect(image_bytes: bytes) -> dict:
-    """Fallback to Gemini 1.5 Flash when local models are not available."""
+    """Fallback to Gemini 2.5 Flash when local models are not available."""
     key = os.environ.get('GEMINI_API_KEY')
     if not key:
         return {'error': 'No local models found and GEMINI_API_KEY is not set. '
@@ -108,26 +108,47 @@ def _gemini_detect(image_bytes: bytes) -> dict:
     import urllib.request, urllib.error
     b64 = _to_jpeg_b64(image_bytes)
     url  = (f'https://generativelanguage.googleapis.com/v1beta/'
-            f'models/gemini-1.5-flash:generateContent?key={key}')
+            f'models/gemini-2.5-flash:generateContent?key={key}')
     payload = json.dumps({
         'contents': [{'parts': [
             {'inline_data': {'mime_type': 'image/jpeg', 'data': b64}},
             {'text': GEMINI_PROMPT}
         ]}],
-        'generationConfig': {'temperature': 0, 'maxOutputTokens': 256}
+        'generationConfig': {
+            'temperature': 0,
+            'maxOutputTokens': 1024,
+            'response_mime_type': 'application/json',
+        }
     }).encode()
     try:
         req = urllib.request.Request(url, data=payload,
                                      headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
-        raw = data['candidates'][0]['content']['parts'][0]['text'].strip().strip('`')
-        if raw.startswith('json'): raw = raw[4:].strip()
+
+        # Check for safety blocks or empty candidates
+        if not data.get('candidates'):
+            reason = data.get('promptFeedback', {}).get('blockReason', 'unknown')
+            return {'error': f'Gemini blocked the request: {reason}'}
+
+        candidate = data['candidates'][0]
+        finish = candidate.get('finishReason', '')
+        if finish not in ('STOP', 'MAX_TOKENS', ''):
+            return {'error': f'Gemini did not finish normally (reason: {finish})'}
+
+        raw = candidate['content']['parts'][0]['text'].strip()
+        # Strip markdown fences if present (some model versions still add them)
+        raw = raw.strip('`')
+        if raw.lower().startswith('json'):
+            raw = raw[4:].strip()
+
         detection = json.loads(raw)
+
     except urllib.error.HTTPError as e:
-        return {'error': f'Gemini API error {e.code}: {e.read().decode()[:200]}'}
-    except json.JSONDecodeError:
-        return {'error': 'Model returned unexpected format'}
+        body = e.read().decode()[:300]
+        return {'error': f'Gemini API error {e.code}: {body}'}
+    except json.JSONDecodeError as e:
+        return {'error': f'Could not parse Gemini response as JSON: {e}'}
     except Exception as e:
         return {'error': f'Detection failed: {e}'}
 
