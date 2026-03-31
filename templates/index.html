@@ -1,99 +1,138 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Resist</title>
-	<link rel="stylesheet" href="/static/style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resist — Resistor Decoder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-	<header class="container">
-		<h1>Resistance Checker</h1>
-		<p class="subtitle">Upload or capture a resistor, detect bands, and compute resistance.</p>
-		<div style="margin-top:12px">
-			<button id="themeToggle" class="button secondary" type="button">Toggle Theme</button>
-		</div>
-	</header>
+  <div class="app">
 
-	<main class="container card">
-		<section class="controls" style="justify-content:space-between">
-			<div style="display:flex; gap:8px">
-				<button id="imageModeBtn" class="button primary" type="button">Image Mode</button>
-				<button id="manualModeBtn" class="button secondary" type="button">Manual Mode</button>
-			</div>
-		</section>
+    <!-- Header -->
+    <header>
+      <div class="logo">resist<span class="accent-dot">.</span></div>
+      <p class="tagline">Identify any resistor instantly</p>
+    </header>
 
-		<div id="imageMode">
-			<section class="controls">
-				<div class="upload">
-					<button id="selectBtn" class="button secondary" type="button">Select Image</button>
-					<input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
-					<button id="cameraBtn" class="button primary" type="button">Use Camera</button>
-				</div>
-			</section>
+    <!-- Mode Tabs -->
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="image" role="tab" aria-selected="true">Photo / Camera</button>
+      <button class="tab" data-tab="manual" role="tab" aria-selected="false">Manual</button>
+    </nav>
 
-			<section class="preview">
-				<canvas id="preview" width="640" height="480"></canvas>
-				<video id="video" autoplay playsinline class="hidden"></video>
-			</section>
+    <!-- ── IMAGE MODE ───────────────────────────────── -->
+    <section id="tab-image" class="tab-panel" role="tabpanel">
 
-			<section class="actions">
-				<button id="analyzeBtn" class="button secondary" type="button" disabled>Analyze</button>
-			</section>
-		</div>
+      <!-- Input area: dropzone OR preview -->
+      <div id="inputArea">
 
-		<div id="manualMode" class="hidden">
-			<section class="manual card" style="margin-top:0">
-				<h3 style="margin-top:0">Resistor color code calculator</h3>
-				<div class="manual-grid">
-					<div class="manual-row">
-						<label class="manual-label">Number of Bands:</label>
-						<select id="bandsSel" class="manual-select">
-							<option value="3">3 Band</option>
-							<option value="4" selected>4 Band</option>
-							<option value="5">5 Band</option>
-							<option value="6">6 Band</option>
-						</select>
-					</div>
+        <!-- Dropzone (default) -->
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload resistor image">
+          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" hidden />
+          <svg class="dz-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p class="dz-title">Drop a resistor photo here</p>
+          <p class="dz-hint">JPG · PNG · WebP &nbsp;·&nbsp; max 10 MB</p>
+          <div class="dz-btns">
+            <button class="btn btn-accent" id="selectBtn" type="button">Browse Files</button>
+            <button class="btn btn-ghost" id="cameraBtn" type="button">Use Camera</button>
+          </div>
+        </div>
 
-					<div class="manual-row" id="row-d1">
-						<label class="manual-label">1st Band Color:</label>
-						<div class="chip-group" id="chips-d1"></div>
-					</div>
-					<div class="manual-row" id="row-d2">
-						<label class="manual-label">2nd Band Color:</label>
-						<div class="chip-group" id="chips-d2"></div>
-					</div>
-					<div class="manual-row" id="row-d3">
-						<label class="manual-label">3rd Band Color:</label>
-						<div class="chip-group" id="chips-d3"></div>
-					</div>
-					<div class="manual-row">
-						<label class="manual-label">Multiplier Color:</label>
-						<div class="chip-group" id="chips-mul"></div>
-					</div>
-					<div class="manual-row" id="row-tol">
-						<label class="manual-label">Tolerance Color:</label>
-						<div class="chip-group" id="chips-tol"></div>
-					</div>
-					<div class="manual-row" id="row-temp">
-						<label class="manual-label">Temperature Coefficient:</label>
-						<div class="chip-group" id="chips-temp"></div>
-					</div>
-					<div class="manual-actions">
-						<button id="manualCalc" class="button primary" type="button">Calculate</button>
-					</div>
-				</div>
-			</section>
-		</div>
+        <!-- Preview: canvas (file) or video (camera) -->
+        <div id="previewArea" class="preview-area hidden">
+          <button class="clear-btn" id="clearBtn" type="button" aria-label="Clear image" title="Clear">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 2l12 12M14 2L2 14"/></svg>
+          </button>
+          <canvas id="previewCanvas"></canvas>
+          <video id="videoEl" autoplay playsinline class="hidden"></video>
+          <div id="cameraHint" class="camera-hint hidden">Point at a resistor, then tap Analyze</div>
+        </div>
+      </div>
 
-		<section id="result" class="result hidden"></section>
-	</main>
+      <!-- Analyze button -->
+      <button id="analyzeBtn" class="btn-analyze hidden" type="button" disabled>
+        <span id="analyzeTxt">Analyze Bands</span>
+        <div class="btn-spinner hidden" id="analyzeSpinner"></div>
+      </button>
 
-	<footer class="container muted">
-		<p>Tip: Ensure good lighting and the resistor is in focus.</p>
-	</footer>
+    </section>
 
-	<script src="/static/app.js"></script>
+    <!-- ── MANUAL MODE ──────────────────────────────── -->
+    <section id="tab-manual" class="tab-panel hidden" role="tabpanel">
+
+      <!-- Live resistor SVG -->
+      <div class="res-wrap">
+        <svg id="resSvg" viewBox="0 0 340 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="#dfc07a"/>
+              <stop offset="45%"  stop-color="#c8a055"/>
+              <stop offset="100%" stop-color="#a07030"/>
+            </linearGradient>
+            <linearGradient id="bodyGradShine" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="rgba(255,255,255,0.18)"/>
+              <stop offset="50%"  stop-color="rgba(255,255,255,0)"/>
+            </linearGradient>
+          </defs>
+          <!-- Leads -->
+          <line x1="0"   y1="40" x2="60"  y2="40" stroke="#888" stroke-width="2.5" stroke-linecap="round"/>
+          <line x1="280" y1="40" x2="340" y2="40" stroke="#888" stroke-width="2.5" stroke-linecap="round"/>
+          <!-- Body -->
+          <rect x="60" y="18" width="220" height="44" rx="10" fill="url(#bodyGrad)"/>
+          <rect x="60" y="18" width="220" height="44" rx="10" fill="url(#bodyGradShine)"/>
+          <!-- Bands injected here -->
+          <g id="svgBands"></g>
+        </svg>
+      </div>
+
+      <!-- Band count -->
+      <div class="band-count-row">
+        <span class="bc-label">Bands</span>
+        <div class="segmented" id="bandCountSeg" role="group" aria-label="Number of bands">
+          <button class="seg-btn" data-n="3" type="button">3</button>
+          <button class="seg-btn active" data-n="4" type="button">4</button>
+          <button class="seg-btn" data-n="5" type="button">5</button>
+          <button class="seg-btn" data-n="6" type="button">6</button>
+        </div>
+      </div>
+
+      <!-- Band pickers (rendered by JS) -->
+      <div id="bandPickers"></div>
+
+      <!-- Inline result -->
+      <div id="manualResult" class="manual-result hidden">
+        <span class="mr-label">Resistance</span>
+        <span class="mr-value" id="mrValue">—</span>
+        <span class="mr-meta" id="mrMeta"></span>
+      </div>
+
+    </section>
+
+    <!-- ── RESULT PANEL (image mode) ────────────────── -->
+    <div id="resultPanel" class="result-panel hidden">
+      <p class="rp-label">Resistance</p>
+      <div class="rp-value" id="rpValue">—</div>
+      <div class="rp-chips" id="rpChips"></div>
+      <div class="rp-bands-label">Detected bands</div>
+      <div class="rp-bands" id="rpBands"></div>
+      <p class="rp-confidence" id="rpConfidence"></p>
+    </div>
+
+    <!-- ── ERROR PANEL ───────────────────────────────── -->
+    <div id="errorPanel" class="error-panel hidden">
+      <svg viewBox="0 0 20 20" fill="currentColor" class="err-icon" aria-hidden="true">
+        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+      </svg>
+      <span id="errorMsg"></span>
+    </div>
+
+  </div><!-- /.app -->
+  <script src="/static/app.js"></script>
 </body>
 </html>

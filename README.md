@@ -1,108 +1,193 @@
-# Resistance Checker
+# resist.
 
-A clean web app to detect resistor color bands from a photo and compute the resistance value. Built with Flask, OpenCV, and a modern HTML/CSS/JS UI.
+> Identify any resistor instantly — upload a photo or pick bands manually.
+
+A clean, minimal web app that decodes resistor color bands using AI vision. Built with Flask and a zero-dependency frontend.
+
+![resist UI](https://img.shields.io/badge/stack-Flask%20%2B%20Gemini-orange?style=flat-square) ![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+
+---
 
 ## Features
-- Upload an image or capture via camera (if supported by the browser)
-- Detects color bands using OpenCV and estimates resistance
-- Displays a formatted value (Ω, kΩ, MΩ, GΩ) and the detected bands
-- Two modes: Image Mode (camera/upload) and Manual Mode (band picker)
-- Responsive UI for mobile and desktop
 
-## Requirements
-- Python 3.11+ (tested on Windows 10/11)
-- A working camera (optional, for capture)
+- **AI photo detection** — point your camera or drop an image; Gemini Vision reads the bands in any lighting
+- **Manual band picker** — live resistor SVG updates as you pick colors; supports 3, 4, 5, and 6-band resistors
+- **Correct resistance math** — separate formulas for each band count, proper tolerance and tempco display
+- **Formatted output** — Ω / kΩ / MΩ / GΩ with tolerance and confidence indicator
+- **Responsive** — works on mobile and desktop, rear camera supported
 
-## Setup
+---
 
-### 1) Clone or open the project
-Place the folder on your machine, then open a terminal in the project root.
+## Tech stack
 
-### 2) Create a virtual environment
-Windows PowerShell:
-```
+| Layer | Choice |
+|---|---|
+| Backend | Python 3.11 · Flask 3 · Pillow |
+| AI detection | Google Gemini 1.5 Flash (free tier) |
+| Frontend | Vanilla JS · CSS custom properties · no frameworks |
+| Server | Waitress (production) · Flask dev server (local) |
+| Container | Docker |
+
+---
+
+## Getting started
+
+### 1. Get a free Gemini API key
+
+Go to [aistudio.google.com](https://aistudio.google.com) → **Get API key** → Create a key in a new project. The free tier allows 15 requests/minute and 1 million tokens/day — more than enough for personal use.
+
+### 2. Clone and set up
+
+```bash
+git clone https://github.com/your-username/resist
+cd resist
+
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
 
-### 3) Install dependencies
-```
+# Windows
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
-## Run
+### 3. Configure your key
+
+```bash
+cp .env.example .env
+# Edit .env and set your key:
+# GEMINI_API_KEY=AIza...
 ```
+
+### 4. Run
+
+```bash
 python app.py
 ```
-The server will start on `http://127.0.0.1:5000` (also accessible via your local network address shown in the terminal).
+
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000)
+
+---
 
 ## Usage
-1. Open `http://127.0.0.1:5000` in your browser.
-2. Choose a mode using the toggle at the top:
-   - Image Mode: Click "Select Image" to upload a resistor photo, or "Use Camera" to capture, then press "Analyze".
-   - Manual Mode: Pick band colors and multiplier to calculate resistance without an image.
-3. Results show the formatted resistance value and any detected bands.
 
-## Mobile
-- The UI is mobile-friendly; canvas scales to the device width and redraws on orientation change/resizes.
-- Camera uses the rear lens when available and prefers 1280×720.
+**Photo mode** — click "Browse Files" or "Use Camera", select a resistor image, press **Analyze Bands**. The app sends the image to Gemini Vision which identifies the band colors, then calculates resistance client-side.
 
-## Notes & Tips
-- Good lighting and focus improve band detection accuracy.
-- Color thresholds for detection are defined in `resit.py` in `Colour_Range`. You can tune these for your camera/lighting.
-- Supported image formats: `.jpg`, `.jpeg`, `.png`, `.webp`.
+**Manual mode** — switch to the Manual tab, select how many bands your resistor has (3–6), then click each band's color. The resistor diagram and resistance value update in real time.
 
-## Project Structure
+### Tips for better photo detection
+
+- Good, even lighting matters most — avoid shadows across the bands
+- Photograph the resistor on a plain white or dark background
+- Get as close as possible so the body fills the frame
+- If confidence shows as "low", try manual mode instead
+
+---
+
+## Project structure
+
 ```
-app.py                 # Flask server with /, /health and /analyze
-resit.py               # OpenCV band detection logic
-requirements.txt       # Python dependencies
-Dockerfile             # Container image
-.dockerignore          # Docker build context prune
-.gitignore             # VCS ignores
-templates/index.html   # Frontend HTML
-static/style.css       # UI styles
-static/app.js          # Frontend logic (upload/camera/analyze + manual picker)
-```
-
-## Deploy
-
-### Option A: Docker (any VM or container service)
-```
-docker build -t resistor-checker .
-docker run -p 8080:8080 resistor-checker
-```
-Open `http://localhost:8080`. Health check endpoint: `/health`.
-
-### Option B: AWS App Runner (from GitHub repo)
-1. Push this project to a GitHub repository.
-2. In AWS Console, open App Runner → Create service.
-3. Source: Repository → connect your GitHub repo and branch.
-4. Build type: Use Dockerfile in repo (default). No extra build commands needed.
-5. Port: set to `8080` (Dockerfile exposes 8080; Waitress listens on `${PORT}`).
-6. Health check path: `/health`.
-7. Create service. App Runner will build and deploy on each push.
-
-### Option C: Render.com (free tier friendly)
-1. Push to GitHub.
-2. Create a new Web Service → Connect repo.
-3. Runtime: Docker → it detects the Dockerfile.
-4. Set port to `8080`. Deploy.
-
-### Option D: AWS Amplify (frontend) + App Runner/Render (backend)
-Amplify Hosting excels at static sites. Use it for the UI and host the Python API elsewhere:
-- Host the UI (contents of `templates`+`static`) with Amplify/any static host.
-- Host the Flask API with App Runner or Render (using the provided Dockerfile).
-- Point the UI to the remote API. In `static/app.js`, change the fetch calls from `fetch('/analyze', ...)` to:
-```
-fetch('https://your-api.example.com/analyze', { method: 'POST', body: fd })
+resist/
+├── app.py                 # Flask server: /, /health, /analyze
+├── requirements.txt       # Python dependencies (no heavy ML libs)
+├── Dockerfile             # Container image
+├── .env.example           # API key template
+├── templates/
+│   └── index.html         # Single-page UI
+└── static/
+    ├── style.css          # Dark theme, CSS variables, responsive
+    └── app.js             # Upload, camera, manual picker, state machine
 ```
 
-## Production
-For development, Flask’s built-in server is fine. For production, use a WSGI server like `waitress` (already used in Dockerfile):
+---
+
+## Roadmap
+
+The current version uses the Gemini API for detection. The long-term goal is a fully self-hosted model with no API dependency. Here's the path:
+
+### Phase 0 — current
+Gemini 1.5 Flash via API. Free tier. Works on any photo.
+
+### Phase 1 — data collection
+Gather a resistor dataset. The [Roboflow Universe](https://universe.roboflow.com/search?q=resistor) has several annotated resistor datasets you can export in YOLO format. Supplement with your own photos.
+
+### Phase 2 — custom model
+Train [YOLOv8n](https://docs.ultralytics.com/models/yolov8/) on Google Colab (free GPU) to detect the band bounding boxes. Then train a small CNN color classifier on the cropped band images. Export both to ONNX for fast CPU inference.
+
+Colab training notebook: [Ultralytics YOLOv8 tutorial](https://colab.research.google.com/github/ultralytics/ultralytics/blob/main/examples/tutorial.ipynb)
+
+Roboflow resistor dataset: [universe.roboflow.com — resistor](https://universe.roboflow.com/search?q=resistor+color+band)
+
+### Phase 3 — self-hosted
+Replace the Gemini API call with local ONNX inference. Zero API costs, runs offline, works in airgapped environments.
+
+
+---
+
+## Deployment
+
+### Local development
+
+```bash
+python app.py
+# Runs on http://127.0.0.1:5000
 ```
-waitress-serve --host=0.0.0.0 --port=8080 app:app
+
+### Docker
+
+```bash
+docker build -t resist .
+docker run -p 8080:8080 -e GEMINI_API_KEY=AIza... resist
 ```
+
+### AWS App Runner 
+
+App Runner scales to near-zero when idle (0.25 vCPU / 512 MB floor) so it won't burn credits sitting unused.
+
+1. Push this repo to GitHub
+2. Open the [AWS Console → App Runner](https://console.aws.amazon.com/apprunner)
+3. **Create service** → Source: **Repository** → connect your GitHub repo and branch
+4. Build: use **Dockerfile** (auto-detected)
+5. Port: `8080`
+6. Environment variable: `GEMINI_API_KEY` = your key
+7. Health check path: `/health`
+8. Deploy — App Runner builds and redeploys on every push
+
+Estimated cost with AWS credits: near zero for low-traffic personal use.
+
+
+---
+
+## Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes | Google AI Studio API key |
+| `PORT` | No | Server port (default: 8080 in Docker, 5000 local) |
+
+---
+
+## Switching AI providers
+
+The detection logic is isolated in the `/analyze` route in `app.py`. To swap providers, only this function needs changing. The rest of the app (calculation logic, UI, manual mode) is unaffected.
+
+The prompt used for detection:
+```
+Identify the resistor color bands in this image, reading left-to-right
+starting from the end nearest a lead/leg. Return ONLY valid JSON:
+{"bands":["color1","color2",...],"confidence":"high|medium|low"}
+```
+
+---
+
+## Contributing
+
+Pull requests welcome. If you've trained a custom YOLO model for band detection and want to contribute it, please open an issue first to discuss the integration approach.
+
+---
 
 ## License
+
 MIT

@@ -1,375 +1,482 @@
-const fileInput = document.getElementById('fileInput');
-const selectBtn = document.getElementById('selectBtn');
-const cameraBtn = document.getElementById('cameraBtn');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const preview = document.getElementById('preview');
-const video = document.getElementById('video');
-const result = document.getElementById('result');
-const themeToggle = document.getElementById('themeToggle');
+'use strict';
 
-let stream = null;
-let currentBlob = null;
-let lastDrawnImage = null;
+/* ── Color data ─────────────────────────────────────────────────────────────── */
+const HEX = {
+  black:  '#1a1a1a', brown:  '#8B4513', red:    '#CC2200',
+  orange: '#FF7700', yellow: '#FFD700', green:  '#2A7A2A',
+  blue:   '#1560B8', violet: '#7B1FA2', gray:   '#757575',
+  white:  '#F2F2F2', gold:   '#D4A017', silver: '#A8A9AD',
+  none:   'transparent',
+};
 
-// Theme using html[data-theme]
-(function initTheme(){
-	const html = document.documentElement;
-	const saved = localStorage.getItem('theme') || 'dark';
-	html.dataset.theme = saved;
-})();
+const DIGIT_MAP    = {black:0,brown:1,red:2,orange:3,yellow:4,green:5,blue:6,violet:7,gray:8,white:9};
+const MULT_MAP     = {black:1,brown:10,red:100,orange:1e3,yellow:1e4,green:1e5,blue:1e6,violet:1e7,gray:1e8,white:1e9,gold:0.1,silver:0.01};
+const TOL_MAP      = {brown:'±1%',red:'±2%',green:'±0.5%',blue:'±0.25%',violet:'±0.1%',gray:'±0.05%',gold:'±5%',silver:'±10%',none:'±20%'};
+const TEMPCO_MAP   = {black:'250 ppm/K',brown:'100 ppm/K',red:'50 ppm/K',orange:'15 ppm/K',yellow:'25 ppm/K',green:'20 ppm/K',blue:'10 ppm/K',violet:'5 ppm/K',gray:'1 ppm/K'};
 
-themeToggle?.addEventListener('click', () => {
-	const html = document.documentElement;
-	const next = html.dataset.theme === 'light' ? 'dark' : 'light';
-	html.dataset.theme = next;
-	localStorage.setItem('theme', next);
+/* Colors available per band type */
+const COLORS_BY_TYPE = {
+  digit:      ['black','brown','red','orange','yellow','green','blue','violet','gray','white'],
+  multiplier: ['black','brown','red','orange','yellow','green','blue','violet','gray','white','gold','silver'],
+  tolerance:  ['brown','red','green','blue','violet','gray','gold','silver','none'],
+  tempco:     ['black','brown','red','orange','yellow','green','blue','violet','gray'],
+};
+
+/* Band configs per band count */
+const BAND_CONFIGS = {
+  3: [
+    {label:'1st Digit',   type:'digit'},
+    {label:'2nd Digit',   type:'digit'},
+    {label:'Multiplier',  type:'multiplier'},
+  ],
+  4: [
+    {label:'1st Digit',   type:'digit'},
+    {label:'2nd Digit',   type:'digit'},
+    {label:'Multiplier',  type:'multiplier'},
+    {label:'Tolerance',   type:'tolerance'},
+  ],
+  5: [
+    {label:'1st Digit',   type:'digit'},
+    {label:'2nd Digit',   type:'digit'},
+    {label:'3rd Digit',   type:'digit'},
+    {label:'Multiplier',  type:'multiplier'},
+    {label:'Tolerance',   type:'tolerance'},
+  ],
+  6: [
+    {label:'1st Digit',   type:'digit'},
+    {label:'2nd Digit',   type:'digit'},
+    {label:'3rd Digit',   type:'digit'},
+    {label:'Multiplier',  type:'multiplier'},
+    {label:'Tolerance',   type:'tolerance'},
+    {label:'Temp Coeff.', type:'tempco'},
+  ],
+};
+
+/* Default color selections */
+const DEFAULTS = {
+  digit:       'brown',
+  multiplier:  'red',
+  tolerance:   'gold',
+  tempco:      'brown',
+};
+
+/* SVG band x-positions [x, width] per band count */
+const SVG_BANDS = {
+  3: [[90,20],[128,20],[166,20]],
+  4: [[82,16],[110,16],[152,16],[218,16]],
+  5: [[76,14],[100,14],[124,14],[158,14],[220,14]],
+  6: [[72,12],[92,12],[112,12],[146,12],[202,12],[224,12]],
+};
+
+/* ── Formatting ──────────────────────────────────────────────────────────────── */
+function formatOhms(v) {
+  if (v === 0) return {val:'0', unit:'Ω'};
+  const abs = Math.abs(v);
+  if (abs < 1000)  return {val: +v.toPrecision(3) + '',         unit:'Ω'};
+  if (abs < 1e6)   return {val: +(v / 1e3).toPrecision(3) + '', unit:'kΩ'};
+  if (abs < 1e9)   return {val: +(v / 1e6).toPrecision(3) + '', unit:'MΩ'};
+  return               {val: +(v / 1e9).toPrecision(3) + '',    unit:'GΩ'};
+}
+
+/* ── DOM refs ────────────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+const tabs        = document.querySelectorAll('.tab');
+const tabPanels   = document.querySelectorAll('.tab-panel');
+const dropzone    = $('dropzone');
+const fileInput   = $('fileInput');
+const selectBtn   = $('selectBtn');
+const cameraBtn   = $('cameraBtn');
+const previewArea = $('previewArea');
+const previewCanvas = $('previewCanvas');
+const videoEl     = $('videoEl');
+const clearBtn    = $('clearBtn');
+const cameraHint  = $('cameraHint');
+const analyzeBtn  = $('analyzeBtn');
+const analyzeTxt  = $('analyzeTxt');
+const analyzeSpinner = $('analyzeSpinner');
+const resultPanel = $('resultPanel');
+const rpValue     = $('rpValue');
+const rpChips     = $('rpChips');
+const rpBands     = $('rpBands');
+const rpConfidence = $('rpConfidence');
+const errorPanel  = $('errorPanel');
+const errorMsg    = $('errorMsg');
+
+/* Manual */
+const bandCountSeg   = $('bandCountSeg');
+const bandPickers    = $('bandPickers');
+const manualResult   = $('manualResult');
+const mrValue        = $('mrValue');
+const mrMeta         = $('mrMeta');
+const svgBands       = $('svgBands');
+
+/* ── State ───────────────────────────────────────────────────────────────────── */
+let cameraStream    = null;
+let currentBlob     = null;   // blob to send to /analyze
+let imageState      = 'empty'; // 'empty' | 'file' | 'camera' | 'analyzing'
+let manualBandCount = 4;
+let manualSelections = {};    // role index → color name
+
+/* ── Tab switching ───────────────────────────────────────────────────────────── */
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    tabs.forEach(t => { t.classList.toggle('active', t.dataset.tab === target); t.setAttribute('aria-selected', t.dataset.tab === target); });
+    tabPanels.forEach(p => p.classList.add('hidden'));
+    $(`tab-${target}`).classList.remove('hidden');
+    hideResult();
+    hideError();
+  });
 });
 
-function setResult(textHtml){
-	result.innerHTML = textHtml;
-	result.classList.remove('hidden');
+/* ── Image mode: state transitions ─────────────────────────────────────────── */
+function setState(s) {
+  imageState = s;
+  const isEmpty    = s === 'empty';
+  const hasContent = s === 'file' || s === 'camera';
+  const analyzing  = s === 'analyzing';
+
+  // Dropzone vs preview
+  dropzone.classList.toggle('hidden', !isEmpty);
+  previewArea.classList.toggle('hidden', isEmpty);
+
+  // Video vs canvas
+  if (s === 'camera') {
+    videoEl.classList.remove('hidden');
+    previewCanvas.classList.add('hidden');
+    cameraHint.classList.remove('hidden');
+  } else {
+    videoEl.classList.add('hidden');
+    previewCanvas.classList.remove('hidden');
+    cameraHint.classList.add('hidden');
+  }
+
+  // Analyze button
+  analyzeBtn.classList.toggle('hidden', isEmpty);
+  analyzeBtn.disabled = !hasContent && !analyzing;
+
+  if (analyzing) {
+    analyzeBtn.classList.add('loading');
+    analyzeTxt.textContent = 'Analyzing…';
+    analyzeSpinner.classList.remove('hidden');
+  } else {
+    analyzeBtn.classList.remove('loading');
+    analyzeTxt.textContent = s === 'camera' ? 'Capture & Analyze' : 'Analyze Bands';
+    analyzeSpinner.classList.add('hidden');
+    analyzeBtn.disabled = !hasContent;
+  }
 }
 
-function hideResult(){
-	result.classList.add('hidden');
-	result.innerHTML = '';
+function showResult(data) {
+  const {val, unit} = formatOhms(data.ohms);
+  rpValue.textContent = `${val} ${unit}`;
+
+  rpChips.innerHTML = '';
+  if (data.tolerance) rpChips.innerHTML += `<span class="chip tol">${data.tolerance}</span>`;
+  if (data.tempco)    rpChips.innerHTML += `<span class="chip">${data.tempco}</span>`;
+  if (data.band_count) rpChips.innerHTML += `<span class="chip">${data.band_count}-band</span>`;
+
+  rpBands.innerHTML = data.bands.map(c =>
+    `<div class="rp-band">
+      <div class="rp-swatch" style="background:${HEX[c] ?? '#555'};border-color:${c==='white'?'rgba(255,255,255,0.3)':'rgba(255,255,255,0.08)'}"></div>
+      <div class="rp-name">${c}</div>
+    </div>`
+  ).join('');
+
+  const conf = data.confidence || 'medium';
+  rpConfidence.innerHTML = `Model confidence: <span class="conf-${conf}">${conf}</span>`;
+
+  resultPanel.classList.remove('hidden');
+  hideError();
 }
 
-function drawToCanvas(img){
-	lastDrawnImage = img;
-	const ctx = preview.getContext('2d');
-	const dpr = window.devicePixelRatio || 1;
-	const containerWidth = preview.parentElement.clientWidth;
-	const maxW = Math.min(900, containerWidth);
-	const scale = Math.min(1, maxW / img.width);
-	const cssW = Math.round(img.width * scale);
-	const cssH = Math.round(img.height * scale);
-	preview.style.width = cssW + 'px';
-	preview.style.height = cssH + 'px';
-	preview.width = Math.round(cssW * dpr);
-	preview.height = Math.round(cssH * dpr);
-	const ctxScale = 1;
-	preview.getContext('2d').setTransform(ctxScale, 0, 0, ctxScale, 0, 0);
-	ctx.clearRect(0,0,cssW,cssH);
-	ctx.drawImage(img, 0, 0, cssW, cssH);
+function hideResult() {
+  resultPanel.classList.add('hidden');
 }
 
-window.addEventListener('resize', () => {
-	if(lastDrawnImage){
-		drawToCanvas(lastDrawnImage);
-	}
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorPanel.classList.remove('hidden');
+  hideResult();
+}
+
+function hideError() {
+  errorPanel.classList.add('hidden');
+}
+
+function resetImageMode() {
+  stopCamera();
+  currentBlob = null;
+  hideResult();
+  hideError();
+  const ctx = previewCanvas.getContext('2d');
+  ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  fileInput.value = '';
+  setState('empty');
+}
+
+/* ── File selection ─────────────────────────────────────────────────────────── */
+function loadFile(file) {
+  if (!file) return;
+  currentBlob = file;
+  const img = new Image();
+  img.onload = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const maxW = Math.min(900, previewArea.parentElement.clientWidth - 2);
+    const scale = Math.min(1, maxW / img.width);
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    previewCanvas.style.width  = w + 'px';
+    previewCanvas.style.height = h + 'px';
+    previewCanvas.width  = Math.round(w * dpr);
+    previewCanvas.height = Math.round(h * dpr);
+    const ctx = previewCanvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(img.src);
+    setState('file');
+    hideResult();
+    hideError();
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+selectBtn.addEventListener('click', () => {
+  stopCamera();
+  fileInput.click();
 });
 
-function enableAnalyze(enable){
-	analyzeBtn.disabled = !enable;
-}
-
-fileInput.addEventListener('change', async (e) => {
-	hideResult();
-	if(!fileInput.files || !fileInput.files[0]) return;
-	const file = fileInput.files[0];
-	currentBlob = file;
-	const img = new Image();
-	img.onload = () => drawToCanvas(img);
-	img.src = URL.createObjectURL(file);
-	enableAnalyze(true);
+fileInput.addEventListener('change', () => {
+  if (fileInput.files?.[0]) loadFile(fileInput.files[0]);
 });
 
-// Select Image opens file picker and stops camera if active
-selectBtn?.addEventListener('click', () => {
-	if(stream){
-		stopCamera();
-		showCanvas();
-	}
-	fileInput.click();
+/* Drag and drop */
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag-over');
+  const file = e.dataTransfer?.files?.[0];
+  if (file && file.type.startsWith('image/')) loadFile(file);
 });
+dropzone.addEventListener('click', e => { if (e.target === dropzone || e.target.closest('#dropzone') && !e.target.closest('button')) fileInput.click(); });
+dropzone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
 
-// Mode toggle
-const imageModeBtn = document.getElementById('imageModeBtn');
-const manualModeBtn = document.getElementById('manualModeBtn');
-const imageMode = document.getElementById('imageMode');
-const manualMode = document.getElementById('manualMode');
-
-function stopCamera(){
-	if(stream){
-		video.classList.add('hidden');
-		video.pause();
-		stream.getTracks().forEach(t => t.stop());
-		stream = null;
-		cameraBtn.textContent = 'Use Camera';
-	}
+/* ── Camera ──────────────────────────────────────────────────────────────────── */
+async function startCamera() {
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720} }
+    });
+    videoEl.srcObject = cameraStream;
+    await videoEl.play();
+    setState('camera');
+    hideResult();
+    hideError();
+  } catch (err) {
+    showError(`Camera unavailable: ${err.message}`);
+  }
 }
 
-function setActiveModeButton(mode){
-	imageModeBtn?.classList.toggle('is-active', mode==='image');
-	manualModeBtn?.classList.toggle('is-active', mode==='manual');
-	// Swap primary/secondary visuals for clarity
-	if(mode==='image'){
-		imageModeBtn?.classList.add('primary');
-		imageModeBtn?.classList.remove('secondary');
-		manualModeBtn?.classList.add('secondary');
-		manualModeBtn?.classList.remove('primary');
-	}else{
-		manualModeBtn?.classList.add('primary');
-		manualModeBtn?.classList.remove('secondary');
-		imageModeBtn?.classList.add('secondary');
-		imageModeBtn?.classList.remove('primary');
-	}
+function stopCamera() {
+  if (!cameraStream) return;
+  cameraStream.getTracks().forEach(t => t.stop());
+  cameraStream = null;
+  videoEl.srcObject = null;
 }
 
-// Initialize default mode active state
-setActiveModeButton('image');
-
-imageModeBtn?.addEventListener('click', () => {
-	manualMode.classList.add('hidden');
-	imageMode.classList.remove('hidden');
-	setActiveModeButton('image');
-	hideResult();
-});
-
-manualModeBtn?.addEventListener('click', () => {
-	stopCamera();
-	imageMode.classList.add('hidden');
-	manualMode.classList.remove('hidden');
-	setActiveModeButton('manual');
-	hideResult();
-});
-
-// Ensure only one of video/canvas is visible
-function showVideo(){
-	preview.classList.add('hidden');
-	video.classList.remove('hidden');
-}
-function showCanvas(){
-	video.classList.add('hidden');
-	preview.classList.remove('hidden');
-}
-
-// After starting camera
-async function startCamera(){
-	if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
-		throw new Error('getUserMedia not supported');
-	}
-	stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }}});
-	video.srcObject = stream;
-	await video.play();
-	// Match preview canvas CSS size to video for clean layout
-	video.classList.remove('hidden');
-	preview.style.width = video.clientWidth + 'px';
-	preview.style.height = video.clientHeight + 'px';
-	showVideo();
-	cameraBtn.textContent = 'Stop Camera';
-}
-
-// Override camera button handler to use helpers
 cameraBtn.addEventListener('click', async () => {
-	hideResult();
-	enableAnalyze(false);
-	if(stream){
-		stopCamera();
-		showCanvas();
-		return;
-	}
-	try{
-		await startCamera();
-		setTimeout(() => {
-			const off = document.createElement('canvas');
-			off.width = video.videoWidth; off.height = video.videoHeight;
-			const c = off.getContext('2d');
-			c.drawImage(video, 0, 0);
-			off.toBlob(b => { currentBlob = b; enableAnalyze(true); }, 'image/jpeg', 0.9);
-		}, 600);
-	}catch(err){
-		setResult(`<span class="badge"><span class="dot" style="background: var(--danger)"></span> Camera error: ${err}</span>`);
-		fileInput.removeAttribute('hidden');
-		fileInput.click();
-	}
+  if (cameraStream) {
+    stopCamera();
+    resetImageMode();
+    return;
+  }
+  await startCamera();
 });
 
-analyzeBtn.addEventListener('click', async () => {
-	if(!currentBlob){
-		return;
-	}
-	analyzeBtn.disabled = true;
-	setResult('<span class="badge"><span class="dot" style="background: var(--accent)"></span> Analyzing...</span>');
+clearBtn.addEventListener('click', resetImageMode);
 
-	try{
-		const fd = new FormData();
-		fd.append('image', currentBlob, 'image.jpg');
-		const res = await fetch('/analyze', { method: 'POST', body: fd });
-		const data = await res.json();
-		if(!res.ok){
-			throw new Error(data.error || 'Analysis failed');
-		}
-
-		let content = '';
-		if(data.value_ohms != null){
-			const {value, unit} = formatOhms(data.value_ohms);
-			content += `<div class="badge"><span class="dot" style="background: var(--accent-2)"></span> <strong>${value} ${unit}</strong></div>`;
-		}
-		if(data.bands && data.bands.length){
-			content += '<div style="margin-top:10px">Detected bands: ' + data.bands.map(b => `${b.color} (${b.digit})`).join(', ') + '</div>';
-		}
-		setResult(content || 'No bands detected. Try another image.');
-	} catch(err){
-		setResult(`<span class="badge"><span class="dot" style="background: var(--danger)"></span> ${err.message}</span>`);
-	} finally {
-		analyzeBtn.disabled = false;
-	}
-});
-
-function formatOhms(v){
-	const units = ["Ω","kΩ","MΩ","GΩ"];
-	let i=0;
-	while(v >= 1000 && i < units.length - 1){ v /= 1000; i++; }
-	const value = (Math.round(v*100)/100).toLocaleString();
-	return { value, unit: units[i] };
+/* ── Capture frame from live video ─────────────────────────────────────────── */
+function captureVideoFrame() {
+  return new Promise(resolve => {
+    const w = videoEl.videoWidth;
+    const h = videoEl.videoHeight;
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    off.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+    off.toBlob(resolve, 'image/jpeg', 0.9);
+  });
 }
 
-// Manual band picker (revamp-ready)
-const manualControls = document.getElementById('manualControls');
-const colorMap = [
-	{ name: 'BLACK', digit: 0 },
-	{ name: 'BROWN', digit: 1 },
-	{ name: 'RED', digit: 2 },
-	{ name: 'ORANGE', digit: 3 },
-	{ name: 'YELLOW', digit: 4 },
-	{ name: 'GREEN', digit: 5 },
-	{ name: 'BLUE', digit: 6 },
-	{ name: 'VIOLET', digit: 7 },
-	{ name: 'GRAY', digit: 8 },
-	{ name: 'WHITE', digit: 9 },
-];
-const multMap = [
-	{ label: '×10^0 (BLACK)', pow: 0 },
-	{ label: '×10^1 (BROWN)', pow: 1 },
-	{ label: '×10^2 (RED)', pow: 2 },
-	{ label: '×10^3 (ORANGE)', pow: 3 },
-	{ label: '×10^4 (YELLOW)', pow: 4 },
-	{ label: '×10^5 (GREEN)', pow: 5 },
-	{ label: '×10^6 (BLUE)', pow: 6 },
-	{ label: '×10^7 (VIOLET)', pow: 7 },
-	{ label: '×10^8 (GRAY)', pow: 8 },
-	{ label: '×10^9 (WHITE)', pow: 9 },
-	{ label: '×10^-1 (GOLD)', pow: -1 },
-	{ label: '×10^-2 (SILVER)', pow: -2 },
-];
-const tolMap = [
-	{ label: '±1% (BROWN)', pct: 1 },
-	{ label: '±2% (RED)', pct: 2 },
-	{ label: '±0.5% (GREEN)', pct: 0.5 },
-	{ label: '±0.25% (BLUE)', pct: 0.25 },
-	{ label: '±0.1% (VIOLET)', pct: 0.1 },
-	{ label: '±0.05% (ORANGE)', pct: 0.05 },
-	{ label: '±5% (GOLD)', pct: 5 },
-	{ label: '±10% (SILVER)', pct: 10 },
-	{ label: '±20% (NONE)', pct: 20 },
-];
-const tempcoMap = [
-	{ label: '250 ppm/K (BLACK)', ppm: 250 },
-	{ label: '100 ppm/K (BROWN)', ppm: 100 },
-	{ label: '50 ppm/K (RED)', ppm: 50 },
-	{ label: '15 ppm/K (ORANGE)', ppm: 15 },
-	{ label: '25 ppm/K (YELLOW)', ppm: 25 },
-	{ label: '20 ppm/K (GREEN)', ppm: 20 },
-	{ label: '10 ppm/K (BLUE)', ppm: 10 },
-	{ label: '5 ppm/K (VIOLET)', ppm: 5 },
-	{ label: '1 ppm/K (GREY)', ppm: 1 },
-];
+/* ── Analyze ──────────────────────────────────────────────────────────────────── */
+analyzeBtn.addEventListener('click', async () => {
+  let blob = currentBlob;
 
-// Build manual calculator with chips
-(function initManualChips(){
-	const dColors = [
-		{key:'black', label:'black', val:0},
-		{key:'brown', label:'brown', val:1},
-		{key:'red', label:'red', val:2},
-		{key:'orange', label:'orange', val:3},
-		{key:'yellow', label:'yellow', val:4},
-		{key:'green', label:'green', val:5},
-		{key:'blue', label:'blue', val:6},
-		{key:'violet', label:'violet', val:7},
-		{key:'grey', label:'grey', val:8},
-		{key:'white', label:'white', val:9},
-	];
-	const mulColors = [
-		...dColors.map(c=>({key:c.key, label:c.label, pow:c.val})),
-		{key:'gold', label:'gold', pow:-1},
-		{key:'silver', label:'silver', pow:-2},
-	];
-	const tolColors = [
-		{key:'brown', label:'brown', pct:1},
-		{key:'red', label:'red', pct:2},
-		{key:'green', label:'green', pct:0.5},
-		{key:'blue', label:'blue', pct:0.25},
-		{key:'violet', label:'violet', pct:0.1},
-		{key:'orange', label:'orange', pct:0.05},
-		{key:'gold', label:'gold', pct:5},
-		{key:'silver', label:'silver', pct:10},
-		{key:'none', label:'none', pct:20},
-	];
-	const tempColors = [
-		{key:'black', label:'black', ppm:250},
-		{key:'brown', label:'brown', ppm:100},
-		{key:'red', label:'red', ppm:50},
-		{key:'orange', label:'orange', ppm:15},
-		{key:'yellow', label:'yellow', ppm:25},
-		{key:'green', label:'green', ppm:20},
-		{key:'blue', label:'blue', ppm:10},
-		{key:'violet', label:'violet', ppm:5},
-		{key:'grey', label:'grey', ppm:1},
-	];
-	function renderChips(containerId, name, items, swatchField){
-		const group = document.getElementById(containerId);
-		if(!group) return;
-		group.innerHTML = '';
-		items.forEach((item, idx) => {
-			const label = document.createElement('label');
-			label.className = 'chip';
-			const input = document.createElement('input');
-			input.type = 'radio'; input.name = name; input.value = String(item[swatchField]);
-			if(idx===0) input.checked = true;
-			const sw = document.createElement('span'); sw.className = 'swatch swatch-' + item.key;
-			const txt = document.createElement('span'); txt.textContent = item.label;
-			label.appendChild(input); label.appendChild(sw); label.appendChild(txt);
-			group.appendChild(label);
-		});
-	}
-	function updateVisibilityByBands(){
-		const n = parseInt(document.getElementById('bandsSel').value, 10);
-		document.getElementById('row-d3').style.display = (n >= 5) ? '' : 'none';
-		document.getElementById('row-tol').style.display = (n >= 4) ? '' : 'none';
-		document.getElementById('row-temp').style.display = (n >= 6) ? '' : 'none';
-	}
-	function getSelected(name){
-		const el = document.querySelector(`input[name="${name}"]:checked`);
-		return el ? el.value : null;
-	}
-	function calculateFromChips(){
-		const n = parseInt(document.getElementById('bandsSel').value, 10);
-		const d1 = parseInt(getSelected('d1'), 10);
-		const d2 = parseInt(getSelected('d2'), 10);
-		const d3 = parseInt(getSelected('d3') || '0', 10);
-		const mul = parseInt(getSelected('mul'), 10);
-		const tol = getSelected('tol');
-		const temp = getSelected('temp');
-		let digits = '';
-		if(n === 3 || n === 4){ digits = `${d1}${d2}`; }
-		if(n === 5 || n === 6){ digits = `${d1}${d2}${d3}`; }
-		const ohms = Number(digits) * Math.pow(10, mul);
-		const { value, unit } = formatOhms(ohms);
-		let extra = '';
-		if(n >= 4 && tol != null){ extra += `, tolerance ${tol}%`; }
-		if(n >= 6 && temp != null){ extra += `, tempco ${temp} ppm/K`; }
-		setResult(`<div class="badge"><span class="dot" style="background: var(--accent-2)"></span> <strong>${value} ${unit}</strong></div><div class="muted" style="margin-top:8px">${n}-band${extra}</div>`);
-	}
-	// initial render
-	renderChips('chips-d1', 'd1', dColors, 'val');
-	renderChips('chips-d2', 'd2', dColors, 'val');
-	renderChips('chips-d3', 'd3', dColors, 'val');
-	renderChips('chips-mul', 'mul', mulColors, 'pow');
-	renderChips('chips-tol', 'tol', tolColors, 'pct');
-	renderChips('chips-temp', 'temp', tempColors, 'ppm');
-	updateVisibilityByBands();
-	document.getElementById('bandsSel').addEventListener('change', updateVisibilityByBands);
-	document.getElementById('manualCalc').addEventListener('click', calculateFromChips);
-})();
+  // Camera mode: capture current frame first
+  if (imageState === 'camera') {
+    blob = await captureVideoFrame();
+    // Show snapshot
+    const img = new Image();
+    img.onload = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const maxW = Math.min(900, previewArea.parentElement.clientWidth - 2);
+      const scale = Math.min(1, maxW / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      previewCanvas.style.width  = w + 'px';
+      previewCanvas.style.height = h + 'px';
+      previewCanvas.width  = Math.round(w * dpr);
+      previewCanvas.height = Math.round(h * dpr);
+      const ctx = previewCanvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.drawImage(img, 0, 0, w, h);
+    };
+    img.src = URL.createObjectURL(blob);
+    stopCamera();
+    // Show canvas instead of video (setState handles this)
+  }
+
+  if (!blob) return;
+  setState('analyzing');
+  hideResult();
+  hideError();
+
+  try {
+    const fd = new FormData();
+    fd.append('image', blob, 'resistor.jpg');
+    const res = await fetch('/analyze', {method: 'POST', body: fd});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    setState('file');
+    showResult(data);
+  } catch (err) {
+    setState('file');
+    showError(err.message);
+  }
+});
+
+/* ── Manual mode ─────────────────────────────────────────────────────────────── */
+function buildPickers(n) {
+  manualBandCount = n;
+  const config = BAND_CONFIGS[n];
+
+  // Initialize selections with defaults
+  manualSelections = {};
+  config.forEach((band, i) => {
+    manualSelections[i] = DEFAULTS[band.type];
+  });
+
+  // Render picker rows
+  bandPickers.innerHTML = '';
+  config.forEach((band, i) => {
+    const colors = COLORS_BY_TYPE[band.type];
+    const row = document.createElement('div');
+    row.className = 'band-row';
+    row.innerHTML = `<div class="band-row-label">${band.label}</div><div class="swatches" data-band="${i}"></div>`;
+    const swatchContainer = row.querySelector('.swatches');
+
+    colors.forEach(color => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swatch-btn' + (color === 'none' ? ' swatch-none' : '');
+      btn.dataset.c = color;
+      btn.dataset.band = i;
+      btn.title = color;
+      btn.setAttribute('aria-label', color);
+      if (color !== 'none') {
+        btn.style.background = HEX[color] || '#555';
+      } else {
+        btn.textContent = '—';
+      }
+      if (manualSelections[i] === color) btn.classList.add('sel');
+      btn.addEventListener('click', () => {
+        manualSelections[i] = color;
+        // Update selection UI
+        swatchContainer.querySelectorAll('.swatch-btn').forEach(b => b.classList.remove('sel'));
+        btn.classList.add('sel');
+        updateSvgBands();
+        updateManualResult();
+      });
+      swatchContainer.appendChild(btn);
+    });
+
+    bandPickers.appendChild(row);
+  });
+
+  updateSvgBands();
+  updateManualResult();
+}
+
+function updateSvgBands() {
+  const n = manualBandCount;
+  const config = BAND_CONFIGS[n];
+  const positions = SVG_BANDS[n];
+
+  svgBands.innerHTML = '';
+  config.forEach((band, i) => {
+    const color = manualSelections[i] ?? DEFAULTS[band.type];
+    if (color === 'none') return;
+    const [x, w] = positions[i];
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', '18');
+    rect.setAttribute('width', w);
+    rect.setAttribute('height', '44');
+    rect.setAttribute('fill', HEX[color] || '#555');
+    if (color === 'white') rect.setAttribute('fill-opacity', '0.85');
+    svgBands.appendChild(rect);
+  });
+}
+
+function updateManualResult() {
+  const n = manualBandCount;
+  const config = BAND_CONFIGS[n];
+  const bands = config.map((_, i) => manualSelections[i] ?? DEFAULTS[config[i].type]);
+
+  // Client-side resistance calculation (matches server logic)
+  try {
+    let ohms;
+    let tol = null;
+    let tempco = null;
+    const d = s => DIGIT_MAP[s] ?? 0;
+    const m = s => MULT_MAP[s] ?? 1;
+    const t = s => TOL_MAP[s];
+    const tc = s => TEMPCO_MAP[s];
+
+    if (n === 3) {
+      ohms = (d(bands[0])*10 + d(bands[1])) * m(bands[2]);
+    } else if (n === 4) {
+      ohms = (d(bands[0])*10 + d(bands[1])) * m(bands[2]);
+      tol = t(bands[3]);
+    } else if (n === 5) {
+      ohms = (d(bands[0])*100 + d(bands[1])*10 + d(bands[2])) * m(bands[3]);
+      tol = t(bands[4]);
+    } else if (n === 6) {
+      ohms = (d(bands[0])*100 + d(bands[1])*10 + d(bands[2])) * m(bands[3]);
+      tol = t(bands[4]);
+      tempco = tc(bands[5]);
+    }
+
+    const {val, unit} = formatOhms(ohms);
+    mrValue.textContent = `${val} ${unit}`;
+    const meta = [tol, tempco].filter(Boolean).join(' · ');
+    mrMeta.textContent = meta;
+    manualResult.classList.remove('hidden');
+  } catch (e) {
+    manualResult.classList.add('hidden');
+  }
+}
+
+/* Band count switcher */
+bandCountSeg.querySelectorAll('.seg-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    bandCountSeg.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    buildPickers(parseInt(btn.dataset.n, 10));
+  });
+});
+
+/* ── Init ─────────────────────────────────────────────────────────────────────── */
+setState('empty');
+buildPickers(4);
