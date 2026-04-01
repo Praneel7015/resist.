@@ -5,3 +5,4 @@ numpy==1.26.4
 opencv-python-headless==4.9.0.80
 onnxruntime==1.17.3
 mangum==0.17.0
+asgiref==3.8.1
