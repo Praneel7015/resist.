@@ -8,5 +8,4 @@ Thumbs.db
 .vscode/
 .idea/
 uploads/
-inference/models/*.onnx
 .env

@@ -1,8 +1,7 @@
 Flask==3.0.3
 Pillow==10.4.0
-waitress==3.0.0
-python-dotenv>=1.0.0
-numpy
-opencv-python-headless
-onnxruntime
+python-dotenv==1.0.1
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+onnxruntime==1.17.3
 mangum==0.17.0

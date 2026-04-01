@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.git
+node_modules
+.venv/
+venv/
+Thumbs.db
+.vscode/
+.idea/
+uploads/
+.env
