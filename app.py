@@ -74,10 +74,31 @@ GEMINI_PROMPT = (
 )
 
 
+def _needs_flip(bands: list) -> bool:
+    """Check if bands are reversed (gold/silver in digit position)."""
+    if not bands:
+        return False
+    if bands[0] in ('gold', 'silver'):
+        return True
+    if len(bands) >= 4 and bands[1] in ('gold', 'silver'):
+        return True
+    return False
+
+
 def _calc(bands: list) -> dict:
     b = [c.lower().strip() for c in bands]
     n = len(b)
+
+    # Auto-flip if gold/silver detected in digit positions
+    flipped = False
+    if _needs_flip(b):
+        b = b[::-1]
+        flipped = True
+
     res = {'bands': b, 'band_count': n}
+    if flipped:
+        res['flipped'] = True
+
     try:
         if n == 3:
             res['ohms'] = (DIGIT[b[0]] * 10 + DIGIT[b[1]]) * MULT[b[2]]
@@ -95,7 +116,10 @@ def _calc(bands: list) -> dict:
         else:
             return {'error': f'Need 3–6 bands, got {n}'}
     except KeyError as e:
-        return {'error': f'Unknown color: {str(e).strip(chr(39))}'}
+        color = str(e).strip(chr(39))
+        if color in ('gold', 'silver'):
+            return {'error': f'Invalid band sequence: {color} cannot be used as a digit band (only as multiplier or tolerance)'}
+        return {'error': f'Unknown color: {color}'}
     return res
 
 
@@ -188,9 +212,10 @@ def analyze():
         return jsonify({'error': f'Unsupported file type: {ext}'}), 400
 
     image_bytes = f.read()
+    use_gemini = request.form.get('use_gemini', '').lower() == 'true'
 
-    # ── Path A: local ONNX models ──────────────────────────────────────────────
-    if _local_detector is not None:
+    # ── Path A: local ONNX models (unless Gemini override) ─────────────────────
+    if _local_detector is not None and not use_gemini:
         result = _local_detector.detect(image_bytes)
         if 'error' in result:
             return jsonify(result), 422
@@ -207,3 +232,7 @@ def analyze():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+# AWS Lambda handler
+from mangum import Mangum
+handler = Mangum(app, lifespan="off")

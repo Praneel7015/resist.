@@ -179,10 +179,33 @@ class ResistorDetector:
         return keep
 
     @staticmethod
+    def _needs_flip(bands: list[str]) -> bool:
+        """Check if bands are reversed (gold/silver in digit position)."""
+        if not bands:
+            return False
+        # Gold/silver should never be first band (always a digit position)
+        if bands[0] in ('gold', 'silver'):
+            return True
+        # For 4+ bands, gold/silver in position 1 also indicates reversal
+        if len(bands) >= 4 and bands[1] in ('gold', 'silver'):
+            return True
+        return False
+
+    @staticmethod
     def _calc(bands: list[str]) -> dict:
         b = [c.lower().strip() for c in bands]
         n = len(b)
+
+        # Auto-flip if gold/silver detected in digit positions
+        flipped = False
+        if ResistorDetector._needs_flip(b):
+            b = b[::-1]
+            flipped = True
+
         res: dict = {'bands': b, 'band_count': n}
+        if flipped:
+            res['flipped'] = True
+
         try:
             if n == 3:
                 res['ohms'] = (DIGIT[b[0]] * 10 + DIGIT[b[1]]) * MULT[b[2]]
@@ -200,7 +223,10 @@ class ResistorDetector:
             else:
                 return {'error': f'Expected 3–6 bands, got {n}'}
         except KeyError as e:
-            return {'error': f'Unknown color: {str(e).strip(chr(39))}'}
+            color = str(e).strip(chr(39))
+            if color in ('gold', 'silver'):
+                return {'error': f'Invalid band sequence: {color} cannot be used as a digit band (only as multiplier or tolerance)'}
+            return {'error': f'Unknown color: {color}'}
         return res
 
 

@@ -111,6 +111,10 @@ const mrValue        = $('mrValue');
 const mrMeta         = $('mrMeta');
 const svgBands       = $('svgBands');
 
+/* Gemini toggle */
+const geminiToggle   = $('geminiToggle');
+const useGeminiCb    = $('useGemini');
+
 /* ── State ───────────────────────────────────────────────────────────────────── */
 let cameraStream    = null;
 let currentBlob     = null;   // blob to send to /analyze
@@ -155,6 +159,9 @@ function setState(s) {
   // Analyze button
   analyzeBtn.classList.toggle('hidden', isEmpty);
   analyzeBtn.disabled = !hasContent && !analyzing;
+
+  // Gemini toggle (show when there's content)
+  geminiToggle.classList.toggle('hidden', isEmpty);
 
   if (analyzing) {
     analyzeBtn.classList.add('loading');
@@ -345,6 +352,7 @@ analyzeBtn.addEventListener('click', async () => {
   try {
     const fd = new FormData();
     fd.append('image', blob, 'resistor.jpg');
+    if (useGeminiCb.checked) fd.append('use_gemini', 'true');
     const res = await fetch('/analyze', {method: 'POST', body: fd});
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);

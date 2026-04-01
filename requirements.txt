@@ -5,3 +5,4 @@ python-dotenv>=1.0.0
 numpy
 opencv-python-headless
 onnxruntime
+mangum==0.17.0

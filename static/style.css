@@ -228,6 +228,27 @@ header {
   border-top-color: var(--muted);
 }
 
+/* Gemini toggle */
+.gemini-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.gemini-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.gemini-toggle .toggle-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 /* ── Preview Area ──────────────────────────────────────────────────────────── */
 .preview-area {
   position: relative;
