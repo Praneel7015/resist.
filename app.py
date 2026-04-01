@@ -235,4 +235,7 @@ if __name__ == '__main__':
 
 # AWS Lambda handler
 from mangum import Mangum
-handler = Mangum(app, lifespan="off")
+from asgiref.wsgi import WsgiToAsgi
+
+asgi_app = WsgiToAsgi(app)
+handler = Mangum(asgi_app)
