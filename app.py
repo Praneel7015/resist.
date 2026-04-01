@@ -19,21 +19,25 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 ALLOWED = {'.jpg', '.jpeg', '.png', '.webp'}
 
-# ── Try to load the local ONNX detector ────────────────────────────────────────
+# ── Lazy load the local ONNX detector ──────────────────────────────────────────
 _local_detector = None
-_local_error    = None
+_detector_checked = False
 
-try:
-    from inference.detector import get_detector
-    _local_detector = get_detector()
-    print("[app] Local ONNX models loaded — running fully offline")
-except FileNotFoundError as e:
-    _local_error = str(e)
-    print(f"[app] Local models not found — will use Gemini API")
-    print(f"[app]    {e}")
-except Exception as e:
-    _local_error = str(e)
-    print(f"[app] Could not load local models: {e} — will use Gemini API")
+def _get_detector():
+    global _local_detector, _detector_checked
+    if _detector_checked:
+        return _local_detector
+    _detector_checked = True
+    try:
+        from inference.detector import get_detector
+        _local_detector = get_detector()
+        print("[app] Local ONNX models loaded — running fully offline")
+    except FileNotFoundError as e:
+        print(f"[app] Local models not found — will use Gemini API")
+        print(f"[app]    {e}")
+    except Exception as e:
+        print(f"[app] Could not load local models: {e} — will use Gemini API")
+    return _local_detector
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _to_jpeg_b64(raw: bytes) -> str:
@@ -195,7 +199,7 @@ def _gemini_detect(image_bytes: bytes) -> dict:
 def health():
     return jsonify({
         'status': 'ok',
-        'mode': 'local' if _local_detector else 'gemini'
+        'mode': 'local' if _get_detector() else 'gemini'
     })
 
 @app.route('/')
@@ -215,8 +219,9 @@ def analyze():
     use_gemini = request.form.get('use_gemini', '').lower() == 'true'
 
     # ── Path A: local ONNX models (unless Gemini override) ─────────────────────
-    if _local_detector is not None and not use_gemini:
-        result = _local_detector.detect(image_bytes)
+    detector = _get_detector()
+    if detector is not None and not use_gemini:
+        result = detector.detect(image_bytes)
         if 'error' in result:
             return jsonify(result), 422
         result['source'] = 'local'
@@ -238,4 +243,4 @@ from mangum import Mangum
 from asgiref.wsgi import WsgiToAsgi
 
 asgi_app = WsgiToAsgi(app)
-handler = Mangum(asgi_app)
+handler = Mangum(asgi_app,lifespan="off")
