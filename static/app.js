@@ -122,6 +122,14 @@ let imageState      = 'empty'; // 'empty' | 'file' | 'camera' | 'analyzing'
 let manualBandCount = 4;
 let manualSelections = {};    // role index → color name
 
+// Preview zoom/pan state (manual wheel zoom)
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5;
+const ZOOM_FACTOR = 1.12;
+let previewZoom = 1;
+let previewPanX = 0;
+let previewPanY = 0;
+
 /* ── Tab switching ───────────────────────────────────────────────────────────── */
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
@@ -212,11 +220,72 @@ function hideError() {
   errorPanel.classList.add('hidden');
 }
 
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function getActivePreviewEl() {
+  return imageState === 'camera' ? videoEl : previewCanvas;
+}
+
+function clampPreviewPan() {
+  const mediaEl = getActivePreviewEl();
+  const maxX = (mediaEl.offsetWidth * (previewZoom - 1)) / 2;
+  const maxY = (mediaEl.offsetHeight * (previewZoom - 1)) / 2;
+  previewPanX = clamp(previewPanX, -maxX, maxX);
+  previewPanY = clamp(previewPanY, -maxY, maxY);
+}
+
+function applyPreviewTransform() {
+  const transform = `translate(${previewPanX}px, ${previewPanY}px) scale(${previewZoom})`;
+  previewCanvas.style.transform = transform;
+  videoEl.style.transform = transform;
+}
+
+function resetPreviewZoom() {
+  previewZoom = 1;
+  previewPanX = 0;
+  previewPanY = 0;
+  applyPreviewTransform();
+}
+
+previewArea.addEventListener('wheel', e => {
+  if (imageState !== 'file' && imageState !== 'camera') return;
+  e.preventDefault();
+
+  const rect = previewArea.getBoundingClientRect();
+  const cursorX = e.clientX - rect.left - rect.width / 2;
+  const cursorY = e.clientY - rect.top - rect.height / 2;
+
+  const prevZoom = previewZoom;
+  const nextZoom = e.deltaY < 0 ? prevZoom * ZOOM_FACTOR : prevZoom / ZOOM_FACTOR;
+  previewZoom = clamp(nextZoom, ZOOM_MIN, ZOOM_MAX);
+
+  if (previewZoom !== prevZoom) {
+    const ratio = previewZoom / prevZoom;
+    previewPanX = cursorX - ratio * (cursorX - previewPanX);
+    previewPanY = cursorY - ratio * (cursorY - previewPanY);
+    clampPreviewPan();
+    applyPreviewTransform();
+  }
+}, {passive: false});
+
+previewArea.addEventListener('dblclick', () => {
+  if (imageState === 'file' || imageState === 'camera') resetPreviewZoom();
+});
+
+window.addEventListener('resize', () => {
+  if (imageState !== 'file' && imageState !== 'camera') return;
+  clampPreviewPan();
+  applyPreviewTransform();
+});
+
 function resetImageMode() {
   stopCamera();
   currentBlob = null;
   hideResult();
   hideError();
+  resetPreviewZoom();
   const ctx = previewCanvas.getContext('2d');
   ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
   fileInput.value = '';
@@ -242,6 +311,7 @@ function loadFile(file) {
     ctx.scale(dpr, dpr);
     ctx.drawImage(img, 0, 0, w, h);
     URL.revokeObjectURL(img.src);
+    resetPreviewZoom();
     setState('file');
     hideResult();
     hideError();
@@ -278,6 +348,7 @@ async function startCamera() {
     });
     videoEl.srcObject = cameraStream;
     await videoEl.play();
+    resetPreviewZoom();
     setState('camera');
     hideResult();
     hideError();
@@ -338,6 +409,7 @@ analyzeBtn.addEventListener('click', async () => {
       const ctx = previewCanvas.getContext('2d');
       ctx.scale(dpr, dpr);
       ctx.drawImage(img, 0, 0, w, h);
+      resetPreviewZoom();
     };
     img.src = URL.createObjectURL(blob);
     stopCamera();

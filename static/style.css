@@ -264,6 +264,8 @@ header {
   width: 100%;
   height: auto;
   border-radius: inherit;
+  transform-origin: center center;
+  will-change: transform;
 }
 .clear-btn {
   position: absolute;
