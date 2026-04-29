@@ -221,6 +221,7 @@ def analyze():
     # ── Path A: local ONNX models (unless Gemini override) ─────────────────────
     detector = _get_detector()
     if detector is not None and not use_gemini:
+        print("defo working")
         result = detector.detect(image_bytes)
         if 'error' in result:
             return jsonify(result), 422
@@ -229,6 +230,7 @@ def analyze():
 
     # ── Path B: Gemini API fallback ────────────────────────────────────────────
     result = _gemini_detect(image_bytes)
+    print("defo not working")
     if 'error' in result:
         code = 422 if 'No' in result['error'] else 500
         return jsonify(result), code
